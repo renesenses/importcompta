@@ -13,6 +13,7 @@ use Data::Dumper;
 use Releve::Schema;
 use File::Basename;
 use Scalar::Util qw(looks_like_number);
+use Sort::Naturally;
 
 #Releve::Schema->load_namespaces;
 
@@ -24,11 +25,14 @@ my $spreadsheet;
 my $book;
 
 my $input_xls;
-$input_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012.xls";
 
+#$input_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2013-MOD.xls"; # OK 
+#$input_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012.xls";
+$input_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012-MOD2.xls";
 
-my $output_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012-OUT.xls";
-
+#my $output_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2013-LAST.xls";
+#my $output_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012-MOD1.xls";
+my $output_xls = "/Users/bertrand/MY_GITHUB/importcompta/releves-bancaires/SCANS/2_OCR/2016-01-27_REL-HSBC-2012-LAST.xls";
 
 my $col;
 my $row;
@@ -36,8 +40,9 @@ my $date;
 my $year;
 
 my $table = 'Mvtxl';
+my $header = 0;
 
-my $line = 0;
+my $line;
 my %OUTPUT_XLS;
 
 # Struct
@@ -58,6 +63,34 @@ sub gettableinfo {
 	}
 }
 
+# Check if first row from row range is an header row (column names)
+# And return 1 for true or 0 false 
+sub hasheader {
+	my $worksheet		= $_[0];
+	my $table_id 		= $_[1];
+	my $source 			= $schema->source($table);
+	my @table_fields 	= $source->columns;
+	# we dont use the PK field 
+	shift(@table_fields);
+	my ($min_row, $max_row) = $worksheet->row_range();
+	my ($min_col, $max_col) = $worksheet->col_range();
+	my @columns;
+	foreach my $col ( $min_col .. $max_col ) {
+		my $cell = $worksheet->get_cell($min_row, $col);
+		push @columns, $cell->value();
+	}	
+	print join(",",@table_fields),"\n";
+	print join(",",@columns),"\n";
+	if ( (join(",",@table_fields)) eq (join(",",@columns)) ) {
+		#print "schema ok \n";
+		return 1;
+	}
+	else {
+		return 0;
+	}	
+}
+
+
 sub getnbcolrequired {
 	my $table_id 		= shift;
 	my $source 			= $schema->source($table_id);
@@ -69,9 +102,9 @@ sub getnbcolrequired {
 
 sub getcoltyperequired {
 	my $table_id = $_[0];
-	print "TABLE : ",$table_id;
+#	print "TABLE : ",$table_id;
 	my $fieldno	 = $_[1];
-	print "\tFIELD NO : ",$fieldno,"\t";
+#	print "\tFIELD NO : ",$fieldno,"\t";
 	# We care of PK not present in xls
 	my $ind = $fieldno +1;
 	my $source 			= $schema->source($table_id);
@@ -101,19 +134,27 @@ sub checksheet {
 	my ($min_col, $max_col) = $worksheet->col_range();
 	print "Min row: ",$min_row,"\t Max row: ",$max_row,"\n";
 	print "Min col: ",$min_col,"\t Max col: ",$max_col,"\n";
+	# We care if fist row of row range is an header
+	$min_row = $min_row + $header;
+	print "Min row: ",$min_row,"\t Max row: ",$max_row,"\n";
+	print "Min col: ",$min_col,"\t Max col: ",$max_col,"\n";
+	$line = 1;
 	foreach $row ($min_row .. $max_row) {
+		print "ROW : ",$row,"\t"; 
 		my $constraint_status 	= 0;
 		my $checkexo_status 	= 0;
 		my $cell_status			= 0;
 		# NB COLUMS CHECK
 		# EMPTY LINE CHECK
-		if (checkemptyline($worksheet,$row)) {
+#		if ( checkemptyline($worksheet,$row) == 0 ) {
+		if ( checkemptyline($worksheet,$row) == 0 || checknearemptyline($worksheet,$row) == 0 ) {
 		# WE DO NOTHING WE DONT CARE OF THIS ROW
+			print "Removed.\n"; 
+			$row++;
 		}
 		else {	
-			$line++;
 			foreach $col ( $min_col .. $max_col ) {
-				print "\t ROW : ",$row,"\t COL : ",$col,"\t";
+				print "\tCOL : ",$col,"\t";
 				my $cell_type = getcoltyperequired($table,$col);
 				my $cell = $worksheet->get_cell($row, $col);
 				$OUTPUT_XLS{$line}{$col}->{type} = $cell_type;
@@ -123,10 +164,11 @@ sub checksheet {
 					$OUTPUT_XLS{$line}{$col}->{comment} = 'UNDEF CELL';
 				}
 				else {
-					$cell_status = checkcell($worksheet,$row, $col);
+					$cell_status = checkcell($worksheet,$row,$col);
 				}	
 			}
 			# CONSTRAINT ON AMOUNT CHECK
+			# TODO ONLY IF NO ERROR IN NUMERIC FORMAT
 			# IF ERR TWO CELLS IN RED
 			if ( checkamountline($worksheet,$row) ){
 				$OUTPUT_XLS{$line}{4}->{status} = 'ERR';	
@@ -140,6 +182,14 @@ sub checksheet {
 				$OUTPUT_XLS{$line}{3}->{status} = 'ERR';	
 				$OUTPUT_XLS{$line}{3}->{comment} = 'EXO VALUE ERROR';
 			};
+			# CONSTRAINT CHECK NEAR EMPTY LINE
+			# IF ERR EXO CELL IN RED
+			if ( checkexoline($worksheet,$row) ) {
+				$OUTPUT_XLS{$line}{3}->{status} = 'ERR';	
+				$OUTPUT_XLS{$line}{3}->{comment} = 'EXO VALUE ERROR';
+			};
+			print "\n";
+			$line++;
 		}	
 			
 	}
@@ -161,13 +211,25 @@ sub checkcell {
 			$date = $year."-".$2."-".$1;		
 			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $date;
-			print " OK_DATE for Row |\t",$date,"\n";
+#			print " OK_DATE for Row |\t",$date,"\n";
+		}
+		elsif ( $val =~ /^\d{4}-\d{2}-\d{2}$/ ) {
+			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
+			$OUTPUT_XLS{$line}{$col}->{value} = $val;
+#			print " OK_DATE for Row |\t",$val,"\n";
+		}
+		elsif ( $val eq ''){
+			$OUTPUT_XLS{$line}{$col}->{status} = 'ERR';	
+			$OUTPUT_XLS{$line}{$col}->{value} = $val;
+			$OUTPUT_XLS{$line}{$col}->{comment} = 'EMPTY_DATE';
+#			print " ERR_DATE for Row |\t",$val,"\n";
+			$status = 1;
 		}
 		else {
 			$OUTPUT_XLS{$line}{$col}->{status} = 'ERR';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $val;
 			$OUTPUT_XLS{$line}{$col}->{comment} = 'ERR_DATE';
-			print " ERR_DATE for Row |\t",$val,"\n";
+#			print " ERR_DATE for Row |\t",$val,"\n";
 			$status = 1;
 		}
 	}	
@@ -177,32 +239,40 @@ sub checkcell {
 			$OUTPUT_XLS{$line}{$col}->{status} = 'ERR';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $val;
 			$OUTPUT_XLS{$line}{$col}->{comment} = 'UNDEF TEXT';
-			print " ERR_TXT for Row |\t",$val,"\n";
+#			print " ERR_TXT for Row |\t",$val,"\n";
 			$status = 1;
 		}	
 		else {
 			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $val;
-			print " OK_TXT for Row |\t",$val,"\n";
+#			print " OK_TXT for Row |\t",$val,"\n";
 		}
 	}
 	elsif ( $type  eq 'numeric' ) {
 		if ( looks_like_number($val) ) {
 			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $val;
-			print " OK_NUM for Row |\t",$val,"\n";
+#			print "ROW: ",$row,"\tCOL: ",$col, "\tMONTANT: ",$OUTPUT_XLS{$line}{$col}->{value},"\n";
+#			print " OK_NUM for Row |\t",$val,"\n";
 		}
 		elsif ($val eq '') {
 			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
 			$OUTPUT_XLS{$line}{$col}->{value} = 0;
-			print " OK_NUM for Row |\t",$val,"\n";
+#			print " OK_NUM for Row |\t",$val,"\n";
+		}
+		elsif ($val =~ /^(\d+)[\,\.](\d{3}([\.\,]\d{0,2})?)$/) {
+			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
+			$OUTPUT_XLS{$line}{$col}->{value} = $1*1000+$2;
+#			print "ROW: ",$row,"\tCOL: ",$col, "\tMONTANT: ",$OUTPUT_XLS{$line}{$col}->{value},"\n";
+#			print " OK_NUM for Row |\t",$val,"\n";
 		}
 		else {
 		# CONVERT TO NUMERIC(9,2) TO ADD 
 			$OUTPUT_XLS{$line}{$col}->{status} = 'ERR';	
 			$OUTPUT_XLS{$line}{$col}->{value} = $val;
 			$OUTPUT_XLS{$line}{$col}->{comment} = 'WRONG NUMERIC FORMAT MAYBE A DOT IS PRESENT';
-			print " ERR_NUM for Row |\t",$val,"\n";
+#			print "ROW: ",$row,"\tCOL: ",$col, "\tMONTANT: ",$OUTPUT_XLS{$line}{$col}->{value},"\n";
+#			print " ERR_NUM for Row |\t",$val,"\n";
 			$status = 1;
 		}			
 	}
@@ -216,6 +286,7 @@ sub checkcell {
 	return $status;
 }
 
+# empty line if status = 0
 sub checkemptyline {
 	my $worksheet			= $_[0];
 	my $row					= $_[1];
@@ -223,13 +294,34 @@ sub checkemptyline {
 	
 	for my $col (0..getnbcolrequired($table)) {
 		my $cell 		= $worksheet->get_cell($row, $col);
-		if ( !defined($cell) ) {
+		if ( defined($cell) ) {
 			$emptyline_status 	= 1;
 			last;
 		}
 	}
 	return $emptyline_status;
 }
+
+# near empty line if status = 0
+sub checknearemptyline {
+	my $worksheet			= $_[0];
+	my $row					= $_[1];
+	my $emptyline_status 	= 0;	
+	
+	for my $col (0..getnbcolrequired($table)) {
+		my $type = getcoltyperequired($table,$col);
+		my $cell = $worksheet->get_cell($row, $col);
+		
+		if ( defined($cell) ) {
+			if ( ($cell->value() ne '') || (($type eq 'numeric') && ($cell->value() != 0)) ){
+				$emptyline_status 	= 1;
+				last;
+			}
+		}		
+	}
+	return $emptyline_status;
+}
+
 
 sub checkamountline {
 	my $worksheet			= $_[0];
@@ -276,35 +368,73 @@ sub checkexoline {
 
 # set_bg_color('red')
 
+sub printkeys() {
+	foreach my $row (nsort (keys %OUTPUT_XLS)) {
+		print $row,"\n";
+	}
+}		
+
 sub writexls {
 #	print Dumper(%OUTPUT_XLS);
+#	printkeys(); 
 	my $writebook = shift;
-	my $writesheet = $writebook->add_worksheet($table);
-	my $date_format 	= $writebook->add_format(num_format => 'yyyy-mm-dd');
-	my $num_format 		= $writebook->add_format(num_format => '#.##0,00');
-#	my $text_format 	= $writebook->add_format(num_format => '#.##0,00');
+	my $writesheet 		= $writebook->add_worksheet($table);
+	$writesheet->set_column(0,0, 20);
+	$writesheet->set_column(1,1, 180);
+	$writesheet->set_column(2,6, 20);
+	# DEFINING CELL FORMATS
+	my %font	= (
+					font  => 'Arial',
+					size  => 12,
+	);
+	
+	
+	my $field_format 	= $writebook->add_format(%font, bold => 1, color => 'white', bg_color => 'orange');
+	$field_format->set_align('center');
+	$field_format->set_border();
+	my $date_format 	= $writebook->add_format(num_format => 'yyyy-mm-dd', %font);
+	$date_format->set_align('center');
+	$date_format->set_border();
+	my $num_format 		= $writebook->add_format(num_format => 'General', %font);
+	$num_format->set_align('right');
+	$num_format->set_border();
+	my $default_format	= $writebook->add_format(%font,bold => 0, color => 'black', bg_color => 'white');
+	$default_format->set_border();
+	my $error_format 	= $writebook->add_format(%font, color => 'white', bold => 1, bg_color => 'red');
+	$error_format->set_border();
+	my $exo_format	= $writebook->add_format(%font,bold => 0, color => 'black', bg_color => 'white');
+	$exo_format->set_align('center');
+	$exo_format->set_border();
 
-
-	# $line = 0 : column names
-	my $format;
+	# WE WRITE HEADERS
+	my $format = $field_format;
 	my $source 			= $schema->source($table);
 	my @table_fields 	= $source->columns;
+	# NO PK
+	shift(@table_fields);
 	foreach my $col (0 ..getnbcolrequired($table)) {
-		$writesheet->write_string(0, $col, $table_fields[$col]);
+		$writesheet->write_string(0, $col, $table_fields[$col], $format);
 	}
 
 	foreach my $row (keys %OUTPUT_XLS) {
 		foreach my $col (0 ..getnbcolrequired($table)) {			
 			# FORMATTING CELL
-			if ( $OUTPUT_XLS{$row}{$col}->{type} eq 'numeric' ) { $format = $num_format;}
-			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'date' ) { $format = $date_format;}
-			else {};
-
-			if ( $OUTPUT_XLS{$row}{$col}->{status} eq 'ERR' ) {$format->set_bg_color('red');} else {$format->set_bg_color('green');}
+			if ( $OUTPUT_XLS{$row}{$col}->{status} eq 'ERR' ) {$format = $error_format;
+			}
+			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'numeric' ) { 
+				$format = $num_format;
+			}
+			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'date' ) {
+				$format = $date_format;
+			}
+			else {
+				$format = $default_format;
+			}
 			
 			# WRITING
 			$writesheet->write($row,$col,$OUTPUT_XLS{$row}{$col}->{value},$format);
-			if ( defined($OUTPUT_XLS{$row}{$col}->{comment}) ) {$writesheet->write_comment($row, $col,$OUTPUT_XLS{$row}{$col}->{comment});}
+			if ( defined($OUTPUT_XLS{$row}{$col}->{comment}) ) {$writesheet->write_comment($row, $col,$OUTPUT_XLS{$row}{$col}->{comment});
+			}
 		}	
  	}
 }
@@ -318,138 +448,15 @@ $book		= $parser->parse($input_xls);
 if ( !defined $book ) {
 	die "Got error code ", $parser->error_code, ".\n";
 }
+
+
 checkbookinfo($book);
-checksheet($book->worksheets()); # ARRAY CONTAINS O?NLY ONE SHEET
+
+$header = hasheader($book->worksheets(),$table);
+print $header,"\n";
+checksheet($book->worksheets()); # ARRAY CONTAINS ONLY ONE SHEET
 gettableinfo($table);
 my $writebook = Spreadsheet::WriteExcel->new($output_xls);
 
 writexls($writebook);
 
-=begin comment
-# THIS SUB WRITES THE RESULTING OUTPUT XLS WITH LIN?E STATUS AND FIRST CAUSE OF REJECT
-# EMPTY LINES ARE DELETED 
-writeoutput() {
-
-my $outbook = Spreadsheet::WriteExcel->new('perl.xls');
- 
-# Add a worksheet
-$worksheet = $workbook->add_worksheet();
- 
-#  Add and define a format
-$format = $workbook->add_format(); # Add a format
-$format->set_bold();
-$format->set_color('red');
-$format->set_align('center');
- 
-# Write a formatted and unformatted string, row and column notation.
-$col = $row = 0;
-$worksheet->write($row, $col, 'Hi Excel!', $format);
-};
-
-# THIS SUB TRY POPULATING Mvtxl table
-populatemvtxls() {
-};
-
-
-
-
-
-	print "####################################\n";
-
-	for my $worksheet ( $workbook->worksheets() ) {
-	
-	#	print Dumper($worksheet);
-	
-		my $table_id 	= $worksheet->get_name();
-		print "TABLE NAME : ",$table_id,"\n";
-		my @columns_id;
-		
-		my ($min_row, $max_row) = $worksheet->row_range();
-		my ($min_col, $max_col) = $worksheet->col_range();
-		print "\tCOL Range : ",$min_col,"\t", $max_col,"\n";
-		print "\tROW Range : ",$min_row,"\t", $max_row,"\n";
-		foreach my $col ( $min_col .. $max_col ) {
-			my $cell = $worksheet->get_cell(0, $col);
-#			print Dumper($cell);
-			push @columns_id, $cell->value();
-		}	
-		my $rs 		= $schema->resultset($table_id );
-		my $record 	= $schema->resultset($table_id )->new_result({});
-		my $source 	= $schema->source($table_id );
-		my @table_fields 	= $source->columns;
-		#$tablefields_pos{$field} return field pos if $field in hash keys
-
-		# We keep field/column pos in list
-		my %tablefields_pos;
-		for my $ind (0..$#table_fields){
-			$tablefields_pos{$table_fields[$ind]} = $ind;
-		}	
-
-		print Dumper(%tablefields_pos);
-
-		my %columnsid_pos;
-		for my $ind (0..$#columns_id){
-			$columnsid_pos{$columns_id[$ind]} = $ind;
-		}	
-
-		print Dumper(%columnsid_pos);
-
-# %hash_pk = map { $_->{$pk} => $_ } $hash;
-		my @test_union = union(\@table_fields,\@columns_id);
-		my @test = subtract(\@table_fields, \@test_union);
-		
-		if ( @test = "") {
-			print "Import requirements ok \n";
-		# required fields in column, so let's finds their position in @columns_id
-			my @ind_position;
-			foreach my $tfield ( @table_fields ) {
-				push @ind_position, $columnsid_pos{$tfield}; 
-			}	
-			foreach my $row ($min_row+1 .. $max_row) {
-				my @db_record =();
-				my @record=(); 
-				foreach my $col ( $min_col .. $max_col )  {
-					
-					my $cell = $worksheet->get_cell($row, $col);
-#					print "(",$row, "\t",$col,")\t:",$cell->value(),"\n";
-					push @record, $cell->value();
-#					print join(",",@record),"\n";
-					# We set @record in good order
-#					print Dumper(@record);
-				}
-				foreach my $pos ( @ind_position ) {
-					push @db_record, $record[$pos];
-				}
-				if ( $table_id eq 'Relecr') {
-					print "source",$db_record[$tablefields_pos{ecr_source}],"\n";
-					if ( $db_record[$tablefields_pos{ecr_source}] eq 'RELEVE BANCAIRE HSBC' ) { 
-						$schema->resultset($table_id)->populate([[ @table_fields ],[ @db_record ]]);
-					}	
-				}
-				else {
-					$schema->resultset($table_id)->populate([[ @table_fields ],[ @db_record ]]);
-				}
-			}
-		} else {
-			print "schema NOK some required fields are missing\n";
-			print "Check if import is possible  \n";
-			
-			# Missing required fields
-			# Available nes fields are already known anf if methods are available
-			
-			my @inter = intersect(\@table_fields,\@columns_id);
-			print "Available required columns : ",join(", ",@inter),"\n";
-			my @missing = subtract(\@table_fields, \@inter);
-			print "Missing required columns : ",join(", ",@missing),"\n";
-			my @avail_fields = subtract(\@columns_id, \@table_fields);
-			print "Available new fields : ",join(", ",@avail_fields),"\n";
-			
-		}
-	}
-}	
-else {
-	print "Input invalid !\n";
-}
-
-=end comment
-=cut

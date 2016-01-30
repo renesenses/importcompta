@@ -197,6 +197,11 @@ sub checkcell {
 			$OUTPUT_XLS{$line}{$col}->{value} = 0;
 			print " OK_NUM for Row |\t",$val,"\n";
 		}
+		elsif ($val =~ /^(\d+)\.(\d{3}(\,\d{0,2})?)$/) {
+			$OUTPUT_XLS{$line}{$col}->{status} = 'OK';	
+			$OUTPUT_XLS{$line}{$col}->{value} = $1.$2;
+			print " OK_NUM for Row |\t",$val,"\n";
+		}
 		else {
 		# CONVERT TO NUMERIC(9,2) TO ADD 
 			$OUTPUT_XLS{$line}{$col}->{status} = 'ERR';	
@@ -276,35 +281,66 @@ sub checkexoline {
 
 # set_bg_color('red')
 
+
+
 sub writexls {
 #	print Dumper(%OUTPUT_XLS);
 	my $writebook = shift;
-	my $writesheet = $writebook->add_worksheet($table);
-	my $date_format 	= $writebook->add_format(num_format => 'yyyy-mm-dd');
-	my $num_format 		= $writebook->add_format(num_format => '#.##0,00');
-#	my $text_format 	= $writebook->add_format(num_format => '#.##0,00');
-
+	my $writesheet 		= $writebook->add_worksheet($table);
+	$writesheet->set_column(0,0, 20);
+	$writesheet->set_column(1,1, 120);
+	$writesheet->set_column(2,6, 20);
+	# DEFINING CELL FORMATS
+	my %font	= (
+					font  => 'Arial',
+					size  => 12,
+	);
+	
+	
+	my $field_format 	= $writebook->add_format(%font, bold => 1, color => 'white', bg_color => 'orange');
+	$field_format->set_align('center');
+	$field_format->set_border();
+	my $date_format 	= $writebook->add_format(num_format => 'yyyy-mm-dd', %font);
+	$date_format->set_align('center');
+	$date_format->set_border();
+	my $num_format 		= $writebook->add_format(num_format => '#,##0.00', %font);
+	$num_format->set_align('right');
+	$num_format->set_border();
+	my $default_format	= $writebook->add_format(%font,bold => 0, color => 'black', bg_color => 'white');
+	$default_format->set_border();
+	my $error_format 	= $writebook->add_format(%font, color => 'white', bold => 1, bg_color => 'red');
+	$error_format->set_border();
+	my $exo_format	= $writebook->add_format(%font,bold => 0, color => 'black', bg_color => 'white');
+	$exo_format->set_align('center');
+	$exo_format->set_border();
 
 	# $line = 0 : column names
-	my $format;
+	my $format = $field_format;
 	my $source 			= $schema->source($table);
 	my @table_fields 	= $source->columns;
 	foreach my $col (0 ..getnbcolrequired($table)) {
-		$writesheet->write_string(0, $col, $table_fields[$col]);
+		$writesheet->write_string(0, $col, $table_fields[$col], $format);
 	}
 
 	foreach my $row (keys %OUTPUT_XLS) {
 		foreach my $col (0 ..getnbcolrequired($table)) {			
 			# FORMATTING CELL
-			if ( $OUTPUT_XLS{$row}{$col}->{type} eq 'numeric' ) { $format = $num_format;}
-			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'date' ) { $format = $date_format;}
-			else {};
-
-			if ( $OUTPUT_XLS{$row}{$col}->{status} eq 'ERR' ) {$format->set_bg_color('red');} else {$format->set_bg_color('green');}
+			if ( $OUTPUT_XLS{$row}{$col}->{status} eq 'ERR' ) {$format = $error_format;
+			}
+			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'numeric' ) { 
+				$format = $num_format;
+			}
+			elsif ( $OUTPUT_XLS{$row}{$col}->{type} eq 'date' ) {
+				$format = $date_format;
+			}
+			else {
+				$format = $default_format;
+			}
 			
 			# WRITING
 			$writesheet->write($row,$col,$OUTPUT_XLS{$row}{$col}->{value},$format);
-			if ( defined($OUTPUT_XLS{$row}{$col}->{comment}) ) {$writesheet->write_comment($row, $col,$OUTPUT_XLS{$row}{$col}->{comment});}
+			if ( defined($OUTPUT_XLS{$row}{$col}->{comment}) ) {$writesheet->write_comment($row, $col,$OUTPUT_XLS{$row}{$col}->{comment});
+			}
 		}	
  	}
 }
